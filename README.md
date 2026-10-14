@@ -151,8 +151,7 @@ data/                   运行时数据：xxt.db / session_cookies.json / creden
 产物是 `dist\学习通小助手.exe`（单文件，约 52 MB，同学拿到不用装 Python）。
 `dist\使用说明.txt` 是给同学看的说明，可以一起发出去。
 
-> 发布到 GitHub Release 时有个坑：`gh release create` 在 Windows 上会把中文文件名转成
-> `default.exe`。建议先复制成 ASCII 名（如 `xxt-assistant-v1.0.0.exe`）再上传。
+> 发布到 GitHub Release。
 > 已发布的版本见 [Releases](https://github.com/led629263224-cmyk/xxt-assistant/releases)。
 
 几个已经处理好的点：
