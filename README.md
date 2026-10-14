@@ -34,7 +34,7 @@
 
 到 **[Releases](https://github.com/led629263224-cmyk/xxt-assistant/releases/latest)** 下载
 `xxt-assistant-v1.0.0.exe`，放到桌面或任意普通文件夹，双击即可，**不需要装 Python**。
-同一个 Release 里的 `xxt-assistant-usage.txt` 是给同学看的三步说明。
+同一个 Release 里的「使用说明」（下载后文件名为 `xxt-assistant-usage.txt`）是给同学看的三步说明。
 
 > 首次运行 Windows 可能提示"已保护你的电脑"，点「更多信息」→「仍要运行」即可（exe 未购买数字签名）。
 > 别放 `C:\Program Files`，那里没有写权限。
