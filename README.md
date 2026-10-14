@@ -30,6 +30,17 @@
 
 ## 二、安装
 
+### 方式一：直接用打包好的 exe（推荐，同学拿到就能用）
+
+到 **[Releases](https://github.com/led629263224-cmyk/xxt-assistant/releases/latest)** 下载
+`xxt-assistant-v1.0.0.exe`，放到桌面或任意普通文件夹，双击即可，**不需要装 Python**。
+同一个 Release 里的 `xxt-assistant-usage.txt` 是给同学看的三步说明。
+
+> 首次运行 Windows 可能提示"已保护你的电脑"，点「更多信息」→「仍要运行」即可（exe 未购买数字签名）。
+> 别放 `C:\Program Files`，那里没有写权限。
+
+### 方式二：从源码跑（想改代码或自己打包）
+
 需要 **Python 3.10+**（本机已验证 3.14）。在本目录（`D:\Desktop\连接qq和微信`）执行：
 
 ```powershell
@@ -137,6 +148,10 @@ data/                   运行时数据：xxt.db / session_cookies.json / creden
 
 产物是 `dist\学习通小助手.exe`（单文件，约 52 MB，同学拿到不用装 Python）。
 `dist\使用说明.txt` 是给同学看的说明，可以一起发出去。
+
+> 发布到 GitHub Release 时有个坑：`gh release create` 在 Windows 上会把中文文件名转成
+> `default.exe`。建议先复制成 ASCII 名（如 `xxt-assistant-v1.0.0.exe`）再上传。
+> 已发布的版本见 [Releases](https://github.com/led629263224-cmyk/xxt-assistant/releases)。
 
 几个已经处理好的点：
 
