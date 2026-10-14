@@ -1,0 +1,45 @@
+# ===== 本地私有配置：含手机号，绝不提交 =====
+config.json
+
+# ===== 运行时数据：含账号凭据 / 登录 Cookie / 数据库 / 日志，绝不提交 =====
+data/
+
+# ===== Python 虚拟环境 =====
+.venv/
+venv/
+env/
+ENV/
+
+# ===== Python 缓存 =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# ===== 打包产物 =====
+dist/
+build/
+*.spec
+*.manifest
+
+# ===== 测试 / 类型检查缓存 =====
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ===== 编辑器 / 系统 =====
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== 日志与临时文件 =====
+*.log
+*.tmp
+*.bak

@@ -1,0 +1,47 @@
+{
+  "sync": {
+    "interval_minutes": 30,
+    "jitter_seconds": 90,
+    "horizon_days": 120,
+    "detail_refresh_hours": 6,
+    "request_delay": 0.7
+  },
+  "remind": {
+    "enabled": true,
+    "threshold_hours": [
+      24,
+      6,
+      1
+    ],
+    "new_homework": true,
+    "new_exam": true,
+    "new_notice": true,
+    "exam_lead_hours": [
+      24,
+      1
+    ],
+    "sound": true,
+    "quiet_hours": [
+      23,
+      7
+    ],
+    "overdue_repeat_hours": 6
+  },
+  "widget": {
+    "x": 1664,
+    "y": 179,
+    "theme": "dark",
+    "always_on_top": false,
+    "opacity": 0.9,
+    "show_notices": true,
+    "notice_count": 3,
+    "expanded": true
+  },
+  "notices": {
+    "enabled": true,
+    "limit": 30
+  },
+  "login": {
+    "phone": ""
+  }
+}
