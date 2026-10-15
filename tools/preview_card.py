@@ -166,8 +166,10 @@ def render_dialogs(app: QApplication, store: Store) -> None:
         return LoginResult(False, "演示：用户名或密码错误")
 
     login = LoginDialog(fake_login)
+    login.data_directory.setText(r"D:\XXT-Data")
     render(app, login, OUT_DIR / "dialog-login.png")
     settings = SettingsDialog(store=store)
+    settings.data_directory.setText(r"D:\XXT-Data")
     for i, name in enumerate(("sync", "remind", "ui", "misc")):
         settings.tabs.setCurrentIndex(i)
         render(app, settings, OUT_DIR / f"dialog-settings-{name}.png")
@@ -184,7 +186,9 @@ def main() -> int:
 
     # 预览必须完全隔离：TaskCard.save_position 会写配置，
     # 不隔离的话跑一次预览就把用户真实的 config.json 改了（曾经踩过）。
+    config._set_data_paths(tmp)
     config.CONFIG_PATH = tmp / "config.json"
+    config._cache = None
     config.CREDENTIAL_PATH = tmp / "credentials.bin"
     config.LOG_PATH = tmp / "app.log"
 

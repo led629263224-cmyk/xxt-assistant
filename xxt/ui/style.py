@@ -239,6 +239,7 @@ def stylesheet(theme: str) -> str:
     QPushButton#Primary {{
         background: {c['accent']}; color: white; border: none; font-weight: 600; }}
     QPushButton#Primary:hover {{ background: {c['accent']}; }}
+    QPushButton#Danger {{ color: {c['danger']}; border: 1px solid {c['danger']}; }}
     /* 卡片右上角的四个小工具按钮 */
     QPushButton#Tool {{
         background: transparent; border: none; padding: 0;
@@ -253,11 +254,12 @@ def stylesheet(theme: str) -> str:
     /* ---- 设置页的标签页 ---- */
     QTabWidget::pane {{
         border: 1px solid {c['border']}; border-radius: 8px;
+        border-top-left-radius: 0px;
         background: {c['panel']}; top: -1px;
     }}
     QTabBar::tab {{
         background: transparent; color: {c['sub']};
-        padding: 6px 14px; margin-right: 2px; font-size: 12px;
+        padding: 8px 17px; margin-right: 0; margin-bottom: -1px; font-size: 12px;
         border: 1px solid transparent; border-top-left-radius: 6px;
         border-top-right-radius: 6px;
     }}

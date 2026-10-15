@@ -57,11 +57,12 @@ class SyncReport:
 
 class SyncService:
     def __init__(self, store: Store, client: ChaoxingClient, notifier: Notifier,
-                 on_report=None):
+                 on_report=None, on_progress=None):
         self.store = store
         self.client = client
         self.notifier = notifier
         self.on_report = on_report
+        self.on_progress = on_progress
         self.last_report: SyncReport | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -72,10 +73,19 @@ class SyncService:
     # -------------------------------------------------- 登录
 
     def login(self, phone: str, password: str, remember: bool = True) -> LoginResult:
-        res = self.client.login(phone, password)
-        if res.ok and remember:
-            config.save_credentials(phone, password)
-        return res
+        if not self._running.acquire(blocking=False):
+            return LoginResult(False, "正在同步，请稍后再登录")
+        try:
+            res = self.client.login(phone, password)
+            if res.ok and remember:
+                config.save_credentials(phone, password)
+            return res
+        finally:
+            self._running.release()
+
+    def _progress(self, text: str) -> None:
+        if self.on_progress:
+            self.on_progress(text)
 
     def ensure_login(self) -> LoginResult:
         return self.client.ensure_login()
@@ -92,7 +102,7 @@ class SyncService:
             return report
         try:
             self._do_sync(report, refresh_details, announce_new)
-        except NotLoggedIn as exc:
+        except XxtError as exc:
             report.ok = False
             report.errors.append(str(exc))
         except Exception as exc:  # pragma: no cover
@@ -117,23 +127,28 @@ class SyncService:
 
     def _do_sync(self, report: SyncReport, refresh_details: bool,
                  announce_new: bool | None) -> None:
+        self._progress("正在验证登录状态…")
         login = self.client.ensure_login()
         if not login.ok:
             raise NotLoggedIn(login.msg)
 
         cfg = config.load()
+        self.client.request_delay = float(cfg["sync"]["request_delay"])
         first_run = not self.store.get_meta("sync_count")
 
         profile = self.client.fetch_profile()
         self.store.set_meta("profile", profile)
 
+        self._progress("正在获取课程列表…")
         courses = self.client.fetch_courses()
         report.courses = len(courses)
         if not courses:
             report.notes.append("未获取到任何课程")
 
-        all_rows: list[dict] = []
-        for course in courses:
+        for index, course in enumerate(courses, 1):
+            if self._stop.is_set():
+                raise XxtError("同步已停止")
+            self._progress(f"正在同步课程 {index}/{len(courses)} · {course['name']}")
             try:
                 data = self.client.fetch_homework_list(course)
             except XxtError as exc:
@@ -142,10 +157,11 @@ class SyncService:
             except Exception as exc:  # pragma: no cover
                 report.errors.append(f"{course['name']}：{type(exc).__name__} {exc}")
                 continue
+            rows = []
             for item in data["items"]:
                 key = assignment_key(course["courseid"], course["clazzid"],
                                      item["url"], item["title"])
-                all_rows.append({
+                rows.append({
                     "key": key,
                     "course": course["name"],
                     "courseid": course["courseid"],
@@ -155,18 +171,26 @@ class SyncService:
                     "url": item["url"],
                     "done": not is_homework_pending(item["status"]),
                 })
-        report.scanned = len(all_rows)
-        diff = self.store.upsert_assignments(all_rows)
-        for key in diff["new"]:
-            row = self._assignment(key)
-            if row:
-                report.new_assignments.append(row)
+            report.scanned += len(rows)
+            diff = self.store.upsert_assignments(rows)
+            for key in diff["new"]:
+                row = self._assignment(key)
+                if row:
+                    report.new_assignments.append(row)
+            self._progress(f"已同步 {index}/{len(courses)} 门课程 · 作业 {report.scanned} 项")
         if refresh_details:
             self._refresh_details(report, cfg)
 
+        if self._stop.is_set():
+            raise XxtError("同步已停止")
+        self._progress("正在同步考试和通知…")
         self._sync_exams(report)
+        if self._stop.is_set():
+            raise XxtError("同步已停止")
         self._sync_notices(report, cfg)
 
+        if self._stop.is_set():
+            raise XxtError("同步已停止")
         announce = (not first_run) if announce_new is None else announce_new
         reminders = self.notifier.scan(announce_new=announce)
         report.reminded = self.notifier.flush(reminders)
@@ -180,6 +204,9 @@ class SyncService:
         hours = float(cfg.get("sync", {}).get("detail_refresh_hours", 6) or 6)
         targets = self.store.assignments_needing_detail(hours, limit=MAX_DETAIL_PER_SYNC)
         for row in targets:
+            if self._stop.is_set():
+                raise XxtError("同步已停止")
+            self._progress(f"正在补全截止时间 · {row['title']}")
             try:
                 detail = self.client.fetch_homework_detail(row["url"])
             except Exception as exc:
@@ -195,6 +222,7 @@ class SyncService:
                 self.store.touch_detail(row["key"])
                 continue
             self.store.update_assignment_detail(row["key"], data)
+            self._progress("已更新作业截止时间…")
 
     def _sync_exams(self, report: SyncReport) -> None:
         try:

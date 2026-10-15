@@ -1,6 +1,6 @@
 # 学习通小助手运行依赖
 # 图形界面
-PySide6>=6.6,<7
+PySide6==6.9.3
 # HTTP 会话与重试
 requests>=2.31
 urllib3>=2.0

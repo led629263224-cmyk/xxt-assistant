@@ -398,11 +398,11 @@ class TestSignatureCache(unittest.TestCase):
         from xxt import client as client_mod
         self.mod = client_mod
         self.tmp = Path(tempfile.mkdtemp(prefix="xxt-sig-"))
-        self._old = client_mod.SIGNATURE_PATH
-        client_mod.SIGNATURE_PATH = self.tmp / "signatures.json"
+        self._old = client_mod.config.DATA_DIR
+        client_mod.config.DATA_DIR = self.tmp
 
     def tearDown(self):
-        self.mod.SIGNATURE_PATH = self._old
+        self.mod.config.DATA_DIR = self._old
 
     def _blank(self, cookie_value: str):
         c = object.__new__(self.mod.ChaoxingClient)

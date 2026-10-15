@@ -63,9 +63,7 @@ def main() -> int:
     app.setPalette(ui_style.build_palette("light"))
 
     tmp = Path(tempfile.mkdtemp(prefix="xxt-smoke-"))
-    config.CONFIG_PATH = tmp / "config.json"
-    config.CREDENTIAL_PATH = tmp / "credentials.bin"
-    config.LOG_PATH = tmp / "app.log"
+    config._set_data_paths(tmp)
     config.load()
     config.save()
 

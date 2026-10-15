@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import shutil
 import sys
 import threading
 from pathlib import Path
@@ -28,6 +29,13 @@ def _base_dir() -> Path:
 BASE_DIR = _base_dir()
 DATA_DIR = BASE_DIR / "data"
 CONFIG_PATH = BASE_DIR / "config.json"
+STORAGE_PATH = BASE_DIR / "storage.json"
+try:
+    _location = json.loads(STORAGE_PATH.read_text(encoding="utf-8"))
+    DATA_DIR = Path(_location["data_dir"]).resolve()
+    CONFIG_PATH = DATA_DIR / "config.json"
+except (OSError, ValueError, KeyError, TypeError):
+    pass
 CREDENTIAL_PATH = DATA_DIR / "credentials.bin"
 COOKIE_PATH = DATA_DIR / "session_cookies.json"
 DB_PATH = DATA_DIR / "xxt.db"
@@ -61,6 +69,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "opacity": 0.97,
         "show_notices": True,
         "notice_count": 3,
+        "background_image": "",
+        "background_overlay": 78,
     },
     "notices": {
         "enabled": True,
@@ -69,6 +79,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "login": {
         "phone": "",
     },
+    "storage": {"selected": False},
 }
 
 _lock = threading.RLock()
@@ -161,3 +172,96 @@ def has_credentials() -> bool:
 
 def clear_credentials() -> None:
     CREDENTIAL_PATH.unlink(missing_ok=True)
+
+
+def _set_data_paths(directory: Path, config_path: Path | None = None) -> None:
+    global DATA_DIR, CONFIG_PATH, CREDENTIAL_PATH, COOKIE_PATH, DB_PATH, LOG_PATH, _cache
+    DATA_DIR = directory
+    CONFIG_PATH = config_path or directory / "config.json"
+    CREDENTIAL_PATH = directory / "credentials.bin"
+    COOKIE_PATH = directory / "session_cookies.json"
+    DB_PATH = directory / "xxt.db"
+    LOG_PATH = directory / "app.log"
+    _cache = None
+
+
+def managed_files() -> list[Path]:
+    """只枚举程序拥有的文件，不删除用户选择的目录或其中的其他文件。"""
+    names = ("xxt.db", "xxt.db-wal", "xxt.db-shm", "session_cookies.json",
+             "credentials.bin", "credentials.bin.tmp", "signatures.json", "signatures.tmp",
+             "background.png", "background.tmp", "app.log", "crash.log", "launch-error.log")
+    files = [CONFIG_PATH, CONFIG_PATH.with_suffix(".json.tmp")] + [DATA_DIR / name for name in names]
+    for folder in (DATA_DIR / "icons", DATA_DIR / "dump"):
+        if folder.is_symlink():
+            raise OSError("数据子目录不能是符号链接")
+        if folder.exists():
+            for path in folder.rglob("*"):
+                if path.is_symlink():
+                    raise OSError("数据目录不能包含符号链接")
+                if path.is_file():
+                    files.append(path)
+    for path in files:
+        if path.is_symlink():
+            raise OSError("数据文件不能是符号链接")
+    return [path for path in files if path.is_file()]
+
+
+def select_data_directory(directory: str | Path) -> None:
+    """调用前必须关闭同步、数据库和日志。先复制成功再切换位置。"""
+    target = Path(directory).expanduser().resolve()
+    source = DATA_DIR.resolve()
+    if target == source:
+        update("storage", selected=True)
+        return
+    if source in target.parents or target in source.parents:
+        raise OSError("请选择与当前数据目录互不包含的文件夹")
+    target.mkdir(parents=True, exist_ok=True)
+    if (target / "config.json").exists():
+        raise OSError("所选文件夹中已有 config.json，请选择空文件夹")
+    cfg = copy.deepcopy(load())
+    copies = []
+    for path in managed_files():
+        if path in (CONFIG_PATH, CONFIG_PATH.with_suffix(".json.tmp")):
+            relative = Path(path.name)
+        else:
+            relative = path.relative_to(DATA_DIR)
+        destination = target / relative
+        if destination.exists():
+            raise OSError(f"所选文件夹中已有 {relative}，请选择空文件夹")
+        copies.append((path, destination))
+    created = []
+    try:
+        for path, destination in copies:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            created.append(destination)
+            shutil.copy2(path, destination)
+        if cfg["widget"].get("background_image") == str(source / "background.png"):
+            cfg["widget"]["background_image"] = str(target / "background.png")
+        cfg["storage"]["selected"] = True
+        config_target = target / "config.json"
+        config_target.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        if config_target not in created:
+            created.append(config_target)
+        pointer = STORAGE_PATH.with_suffix(".json.tmp")
+        pointer.write_text(json.dumps({"data_dir": str(target)}, ensure_ascii=False), encoding="utf-8")
+        os.replace(pointer, STORAGE_PATH)
+    except Exception:
+        for path in created:
+            path.unlink(missing_ok=True)
+        raise
+    _set_data_paths(target)
+    for path, _destination in copies:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            # 新位置已提交，清理失败不能回滚到一半迁移的旧位置。
+            pass
+
+
+def clear_all_data() -> None:
+    """关闭后台与文件句柄后清理本地数据，保留所选位置。"""
+    for path in managed_files():
+        path.unlink(missing_ok=True)
+    cfg = copy.deepcopy(DEFAULT_CONFIG)
+    cfg["storage"]["selected"] = True
+    save(cfg)

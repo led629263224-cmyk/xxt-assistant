@@ -9,9 +9,10 @@ import logging
 import re
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMenu, QPushButton,
+from PySide6.QtCore import (QEvent, QPoint, QRectF, QSize, Qt, QTimer, Signal,
+                            QEasingCurve, QVariantAnimation, Slot)
+from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPainterPath, QPixmap
+from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
 from .. import config
@@ -107,6 +108,37 @@ class ElidedLabel(QLabel):
         self.setToolTip(self._full)
 
 
+class BackgroundCard(QFrame):
+    """按卡片尺寸居中裁剪背景，圆角裁切，并叠加主题蒙层。"""
+
+    def set_background(self, path: str, overlay: int, theme: str) -> None:
+        self._background = QPixmap(path) if path else QPixmap()
+        self._overlay = overlay
+        self._theme = theme
+        self.update()
+
+    def paintEvent(self, event):  # noqa: N802
+        super().paintEvent(event)
+        pm = getattr(self, "_background", QPixmap())
+        if pm.isNull():
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        clip = QPainterPath()
+        clip.addRoundedRect(rect, 12, 12)
+        painter.setClipPath(clip)
+        scaled = pm.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                           Qt.TransformationMode.SmoothTransformation)
+        painter.drawPixmap((self.width() - scaled.width()) // 2,
+                           (self.height() - scaled.height()) // 2, scaled)
+        tint = QColor(style.palette(self._theme)["window"])
+        tint.setAlpha(round(255 * self._overlay / 100))
+        painter.fillRect(rect, tint)
+        painter.setPen(QColor(style.palette(self._theme)["border"]))
+        painter.drawPath(clip)
+
+
 class TaskRow(QFrame):
     """一条待办：左标题 + 右倒计时。右键可以把它从列表里划掉。"""
 
@@ -118,10 +150,21 @@ class TaskRow(QFrame):
         self.setObjectName("Row")
         self._key = key
         self.setToolTip(tooltip or title)
-        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.customContextMenuRequested.connect(self._show_menu)
+        self.setObjectName("SwipeRow")
+        self.body = QFrame(self)
+        self.body.setObjectName("Row")
+        self._press = None
+        self._offset = 0
+        self._dismissing = False
+        self._effect = QGraphicsOpacityEffect(self.body)
+        self._effect.setOpacity(1)
+        self.body.setGraphicsEffect(self._effect)
+        self._animation = QVariantAnimation(self)
+        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._animation.valueChanged.connect(self._move_body)
+        self._animation.finished.connect(self._finish_swipe)
 
-        lay = QVBoxLayout(self)
+        lay = QVBoxLayout(self.body)
         lay.setContentsMargins(10, 7, 10, 7)
         lay.setSpacing(3)
 
@@ -140,18 +183,85 @@ class TaskRow(QFrame):
         self.meta_label = ElidedLabel(meta)
         self.meta_label.setObjectName("Meta")
         lay.addWidget(self.meta_label)
+        for child in (self.body, self.title_label, self.right_label, self.meta_label):
+            child.installEventFilter(self)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return self.body.sizeHint()
+
+    def resizeEvent(self, event):  # noqa: N802
+        self.body.setGeometry(self._offset, 0, self.width(), self.height())
+        super().resizeEvent(event)
+
+    @property
+    def swiping(self) -> bool:
+        return self._press is not None or self._animation.state() == QVariantAnimation.State.Running
+
+    def _move_body(self, value) -> None:
+        self._offset = int(value)
+        self.body.move(self._offset, 0)
+        self._effect.setOpacity(max(0.12, 1 - abs(self._offset) / max(1, self.width())))
+
+    def _finish_swipe(self) -> None:
+        if self._dismissing:
+            self.removeRequested.emit(self._key)
+
+    def _gesture(self, event) -> bool:
+        if not self._key:
+            return False
+        if event.type() == QEvent.Type.UngrabMouse and self._press is not None:
+            self._press = None
+            self._animation.setDuration(220)
+            self._animation.setStartValue(self._offset)
+            self._animation.setEndValue(0)
+            self._animation.start()
+            return True
+        if event.type() == QEvent.Type.ContextMenu:
+            return True
+        if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.RightButton:
+            if self._dismissing:
+                return True
+            self._animation.stop()
+            self._press = event.globalPosition().toPoint()
+            self._origin = self._offset
+            window = self.window()
+            self._swipe_bounds = window.frameGeometry()
+            self._swipe_bounds.moveTopLeft(window.mapToGlobal(QPoint(0, 0)))
+            self.grabMouse()
+            return True
+        if self._press is not None and event.type() == QEvent.Type.MouseMove:
+            position = event.globalPosition().toPoint()
+            delta = position - self._press
+            self._move_body(self._origin + delta.x())
+            return True
+        if (self._press is not None and event.type() == QEvent.Type.MouseButtonRelease
+                and event.button() == Qt.MouseButton.RightButton):
+            position = event.globalPosition().toPoint()
+            delta = position - self._press
+            self._move_body(self._origin + delta.x())
+            self._press = None
+            self.releaseMouse()
+            self._dismissing = ((position.x() > self._swipe_bounds.right() and delta.x() > 0)
+                                or (position.x() < self._swipe_bounds.left() and delta.x() < 0))
+            end = (self.width() if self._offset > 0 else -self.width()) if self._dismissing else 0
+            self._animation.setDuration(180 if self._dismissing else 220)
+            self._animation.setStartValue(self._offset)
+            self._animation.setEndValue(end)
+            self._animation.start()
+            return True
+        return False
+
+    def eventFilter(self, watched, event):  # noqa: N802
+        return self._gesture(event) or super().eventFilter(watched, event)
+
+    def event(self, event):
+        if hasattr(self, "_animation") and self._gesture(event):
+            return True
+        return super().event(event)
 
     def set_right(self, text: str, color: str) -> None:
         self.right_label.setText(text)
         self.right_label.setStyleSheet(f"color: {color}; font-weight: 600;")
-
-    def _show_menu(self, pos: QPoint) -> None:
-        menu = QMenu(self)
-        act = menu.addAction("从列表移除")
-        act.setEnabled(bool(self._key))
-        act.triggered.connect(lambda: self.removeRequested.emit(self._key))
-        menu.exec(self.mapToGlobal(pos))
-
 
 class TaskCard(QWidget):
     refreshRequested = Signal()
@@ -183,6 +293,11 @@ class TaskCard(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(30_000)
+        self._reload_timer = QTimer(self)
+        self._reload_timer.setSingleShot(True)
+        self._reload_timer.timeout.connect(self.reload)
+        from .desktop import DesktopPresence
+        self._desktop_presence = DesktopPresence(self)
 
     # -------------------------------------------------- 构建
 
@@ -197,7 +312,7 @@ class TaskCard(QWidget):
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        self.card = QFrame(self)
+        self.card = BackgroundCard(self)
         self.card.setObjectName("Card")
         outer.addWidget(self.card)
 
@@ -284,8 +399,15 @@ class TaskCard(QWidget):
         wcfg = cfg.get("widget", {})
         self.theme = wcfg.get("theme", "light")
         self.card.setStyleSheet("")
-        self.setStyleSheet(style.stylesheet(self.theme))
+        rules = style.stylesheet(self.theme)
+        if wcfg.get("background_image"):
+            panel = QColor(style.palette(self.theme)["panel"])
+            rules += (f"QFrame#Row {{ background: rgba({panel.red()}, {panel.green()}, "
+                      f"{panel.blue()}, 180); }}")
+        self.setStyleSheet(rules)
         self.setPalette(style.build_palette(self.theme))
+        self.card.set_background(wcfg.get("background_image", ""),
+                                 int(wcfg.get("background_overlay", 78)), self.theme)
         self._apply_window_flags()
         try:
             self.setWindowOpacity(float(wcfg.get("opacity", 0.97)))
@@ -344,6 +466,7 @@ class TaskCard(QWidget):
             config.update("widget", x=self.x(), y=self.y())
 
     def hide_card(self) -> None:
+        self._desktop_presence.set_enabled(False)
         self.save_position()
         self.hide()
 
@@ -358,6 +481,7 @@ class TaskCard(QWidget):
         self.show()
         self.raise_()
         self.reload()
+        self._desktop_presence.set_enabled(True)
 
     def move_to_default_corner(self) -> None:
         """首次运行放到主屏右上角。"""
@@ -375,6 +499,9 @@ class TaskCard(QWidget):
         只列"未完成且还没过期"的作业 + 未完成的考试，混在一起按时间排序：
         作业看截止时间，考试看开考时间，时间未知的排最后。
         """
+        if any(row.swiping for row, _ in self._time_rows):
+            self._reload_timer.start(250)
+            return
         pending = self.store.pending_assignments()
         exams = self.store.unfinished_exams()
         _total, unread = self.store.notice_stats()
@@ -427,11 +554,16 @@ class TaskCard(QWidget):
         else:
             self.badge.hide()
         # 本地没有凭据、或上次同步因为登录失效失败时，都把「去登录」露出来
-        self.btn_login.setVisible(self._need_login or not config.has_credentials())
+        self.btn_login.setVisible(self._need_login or
+                                   not (config.has_credentials() or config.COOKIE_PATH.exists()))
         self._update_next_label()
         # 末尾放一个弹簧：行内容保持紧凑、顶部对齐，多余空间留在底部
         self.list_layout.addStretch(1)
         self.fit_height()
+        self.list_host.adjustSize()
+        self.list_layout.invalidate()
+        QTimer.singleShot(0, self.fit_height)
+        self.update()
 
     def remove_item(self, token: str) -> None:
         """右键菜单里的"从列表移除"：只隐藏本机显示，不同步到学习通。"""
@@ -485,7 +617,7 @@ class TaskCard(QWidget):
             f"题量：{row.get('question_count') or '未知'}",
             f"满分：{row.get('full_score') or '未知'}",
             f"得分：{row.get('score') or '未公布'}",
-            "右键可把这条从清单里移除",
+            "按住右键，将鼠标拖出卡片左侧或右侧边缘后松手移除；窗口内松手回弹",
         ]))
         widget = TaskRow(row.get("title") or "未命名作业", " · ".join(meta_bits),
                          right, color, tooltip, key=f"a:{row['key']}")
@@ -513,7 +645,7 @@ class TaskCard(QWidget):
             f"作答状态：{exam.get('answer_status') or '未知'}",
             f"时长：{exam.get('duration') or '未知'} 分钟",
             f"分数：{exam.get('score') or '未公布'}",
-            "右键可把这条从清单里移除",
+            "按住右键，将鼠标拖出卡片左侧或右侧边缘后松手移除；窗口内松手回弹",
         ]))
         row = TaskRow(exam_name, " · ".join(filter(None, meta_bits)),
                       right, color, tooltip, key=f"e:{exam['key']}")
@@ -576,6 +708,13 @@ class TaskCard(QWidget):
         self.btn_refresh.setEnabled(not syncing)
         if syncing:
             self.set_status("正在同步…", "info")
+
+    @Slot(str)
+    def show_progress(self, text: str) -> None:
+        self.set_syncing(True)
+        self.set_status(text)
+        if not self._reload_timer.isActive():
+            self._reload_timer.start(80)
 
     def show_report(self, report) -> None:
         if report.ok:

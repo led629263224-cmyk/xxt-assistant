@@ -7,12 +7,15 @@
 from __future__ import annotations
 
 import logging
+import time
 
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap
-from PySide6.QtWidgets import QMenu, QSystemTrayIcon
+from PySide6.QtCore import Qt, QUrl, QRectF
+from PySide6.QtGui import (QAction, QColor, QDesktopServices, QFont, QIcon,
+                           QPainter, QPainterPath, QPixmap, QRegion)
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from .. import resources
+from .. import config, resources
+from . import style
 
 log = logging.getLogger("xxt.ui")
 
@@ -47,14 +50,51 @@ def _fallback_icon(color: str = "#2563EB") -> QIcon:
     return QIcon(pm)
 
 
+class RoundedMenu(QMenu):
+    """真正裁掉窗口四角，避免 Windows 原生菜单露出方形底色。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint
+                            | Qt.WindowType.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setMinimumWidth(210)
+        self.apply_theme()
+
+    def apply_theme(self):
+        self.theme = config.load().get("widget", {}).get("theme", "light")
+        self.setPalette(style.build_palette(self.theme))
+        self.setStyleSheet(style.stylesheet(self.theme) + """
+            QMenu { background: transparent; border: none; padding: 8px; }
+            QMenu::item { padding: 9px 20px 9px 12px; border-radius: 7px; }
+        """)
+
+    def resizeEvent(self, event):  # noqa: N802
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()), 12, 12)
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+        super().resizeEvent(event)
+
+    def paintEvent(self, event):  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        colors = style.palette(self.theme)
+        painter.setBrush(QColor(colors["window"]))
+        painter.setPen(QColor(colors["border"]))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(.5, .5, -.5, -.5), 12, 12)
+        painter.end()
+        super().paintEvent(event)
+
+
 class TrayIcon(QSystemTrayIcon):
     def __init__(self, card, on_refresh, on_settings, on_quit, parent=None,
                  on_login=None):
         super().__init__(make_icon(), parent)
         self.card = card
+        self._ignore_trigger_until = 0.0
         self.setToolTip("学习通小助手")
 
-        menu = QMenu()
+        menu = RoundedMenu()
         self.act_toggle = QAction("显示任务清单", menu)
         self.act_toggle.triggered.connect(self.toggle_card)
         menu.addAction(self.act_toggle)
@@ -92,12 +132,20 @@ class TrayIcon(QSystemTrayIcon):
         self.activated.connect(self._on_activated)
 
     def _sync_menu_text(self) -> None:
+        self._menu.apply_theme()
         self.act_toggle.setText("隐藏任务清单" if self.card.isVisible()
                                 else "显示任务清单")
 
+    def apply_theme(self) -> None:
+        self._menu.apply_theme()
+
     def _on_activated(self, reason) -> None:
-        if reason in (QSystemTrayIcon.ActivationReason.Trigger,
-                      QSystemTrayIcon.ActivationReason.DoubleClick):
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            # Windows 双击还可能带着单击通知；双击始终显示，避免连续切换后又隐藏。
+            self._ignore_trigger_until = time.monotonic() + QApplication.doubleClickInterval() / 1000
+            self.card.show_card()
+        elif (reason == QSystemTrayIcon.ActivationReason.Trigger
+                and time.monotonic() >= self._ignore_trigger_until):
             self.toggle_card()
 
     def toggle_card(self) -> None:

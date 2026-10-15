@@ -1,8 +1,11 @@
 # ===== 本地私有配置：含手机号，绝不提交 =====
 config.json
+storage.json
+storage.json.tmp
 
 # ===== 运行时数据：含账号凭据 / 登录 Cookie / 数据库 / 日志，绝不提交 =====
 data/
+docs/live-card*.png
 
 # ===== Python 虚拟环境 =====
 .venv/

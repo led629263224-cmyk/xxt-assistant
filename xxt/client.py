@@ -38,7 +38,6 @@ TIMEOUT = 20.0
 # 课程页签名能缓存多久（签名只跟会话绑定，缓存久一点可以省掉一半请求）
 SIGNATURE_TTL = 6 * 3600.0
 # 课程页签名落盘位置（换会话自动作废，见 _cookie_fingerprint）
-SIGNATURE_PATH = config.DATA_DIR / "signatures.json"
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
@@ -86,6 +85,8 @@ class ChaoxingClient:
         self.request_delay = max(0.0, request_delay)
         self._last_request_at = 0.0
         self._login_checked_at = 0.0
+        self._base_html = ""
+        self._base_at = 0.0
         self._courses_cache: list[dict] | None = None
         self._courses_at = 0.0
         self._hw_cache: dict[tuple[str, str], tuple[float, dict]] = {}
@@ -128,7 +129,7 @@ class ChaoxingClient:
     def clear_cookies(self) -> None:
         self.session.cookies.clear()
         config.COOKIE_PATH.unlink(missing_ok=True)
-        SIGNATURE_PATH.unlink(missing_ok=True)   # 签名跟着会话走，一起作废
+        (config.DATA_DIR / "signatures.json").unlink(missing_ok=True)
 
     def reset_caches(self) -> None:
         """丢弃课程列表、作业列表与课程页签名缓存。"""
@@ -136,6 +137,8 @@ class ChaoxingClient:
         self._courses_at = 0.0
         self._hw_cache.clear()
         self._work_enc_cache.clear()
+        self._base_html = ""
+        self._base_at = 0.0
 
     # -------------------------------------------------- 签名缓存落盘
 
@@ -155,10 +158,11 @@ class ChaoxingClient:
         只在 cookie 没变、且没超过 SIGNATURE_TTL 时使用；服务端不认的话
         fetch_homework_list 会自己重拉课程页兜底。
         """
-        if not SIGNATURE_PATH.exists():
+        path = config.DATA_DIR / "signatures.json"
+        if not path.exists():
             return 0
         try:
-            data = json.loads(SIGNATURE_PATH.read_text("utf-8"))
+            data = json.loads(path.read_text("utf-8"))
         except (OSError, ValueError):
             return 0
         if data.get("fingerprint") != self._cookie_fingerprint():
@@ -189,9 +193,10 @@ class ChaoxingClient:
                 "saved_at": time.time(),
                 "items": items,
             }
-            tmp = SIGNATURE_PATH.with_suffix(".tmp")
+            path = config.DATA_DIR / "signatures.json"
+            tmp = path.with_suffix(".tmp")
             tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-            os.replace(tmp, SIGNATURE_PATH)
+            os.replace(tmp, path)
         except Exception as exc:  # pragma: no cover
             log.warning("保存课程签名失败：%s", exc)
 
@@ -266,6 +271,7 @@ class ChaoxingClient:
             r = self._raw_get(URL_BASE, allow_redirects=True)
             if not self._looks_like_login(r):
                 self._login_checked_at = time.time()
+                self._base_html, self._base_at = r.text, time.time()
                 return True
         except requests.RequestException as exc:
             log.warning("登录态探测失败：%s", exc)
@@ -274,6 +280,8 @@ class ChaoxingClient:
 
     def ensure_login(self, force: bool = False) -> LoginResult:
         """cookie 有效就直接用，否则用本地保存的凭据重新登录。"""
+        if not self.session.cookies and not config.has_credentials():
+            return LoginResult(False, "未登录，请先登录一次")
         if self.check_login(force=force):
             return LoginResult(True, "登录态有效")
         res = self.login()
@@ -309,9 +317,15 @@ class ChaoxingClient:
 
     # -------------------------------------------------- 个人与课程
 
+    def _fetch_base(self) -> str:
+        if not self._base_html or time.time() - self._base_at >= 60:
+            self._base_html = self._get(URL_BASE).text
+            self._base_at = time.time()
+        return self._base_html
+
     def fetch_profile(self) -> dict:
         """姓名 / 学校 / fid。"""
-        base = self._get(URL_BASE).text
+        base = self._fetch_base()
         name = ""
         m = (re.search(r'aria-label="账号：([^"<]{1,20})"', base)
              or re.search(r"账号：([^<\s]{1,20})", base))
@@ -333,7 +347,7 @@ class ChaoxingClient:
         now = time.time()
         if not refresh and self._courses_cache is not None and now - self._courses_at < 300:
             return self._courses_cache
-        base = self._get(URL_BASE).text
+        base = self._fetch_base()
         m = (re.search(r'"fid"\s*:\s*"?(\d+)"?', base)
              or re.search(r"var fid = '(\d+)'", base))
         fid = m.group(1) if m else "427"

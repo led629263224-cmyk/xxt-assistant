@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-import threading
 
 from . import APP_NAME, __version__, config
 from .client import ChaoxingClient
@@ -28,6 +27,9 @@ log = logging.getLogger("xxt")
 # ------------------------------------------------------------------ 日志
 
 def setup_logging(verbose: bool = False) -> None:
+    for handler in logging.getLogger().handlers[:]:
+        logging.getLogger().removeHandler(handler)
+        handler.close()
     config.ensure_dirs()
     # 首次运行时把默认配置落盘（config.json 在程序目录下），方便用户直接改
     if not config.CONFIG_PATH.exists():
@@ -127,7 +129,7 @@ def cmd_reset(args) -> int:
 
 def run_gui(args) -> int:
     try:
-        from PySide6.QtCore import QObject, QSharedMemory, Signal
+        from PySide6.QtCore import QObject, QSharedMemory, QTimer, Qt, Signal, Slot
         from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
     except ImportError:
         print("未安装 PySide6，无法启动界面。请先运行：\n"
@@ -160,23 +162,79 @@ def run_gui(args) -> int:
         report = Signal(object)
         syncing = Signal(bool)
         toast = Signal(str, str, bool)
+        progress = Signal(str)
 
-    class Assistant:
+    class Assistant(QObject):
         def __init__(self):
+            super().__init__()
+            self._maintenance_pending = False
             self.bridge = Bridge()
+            self._build_backend()
+            self.card = TaskCard(self.store, self.sync)
+            self.tray = TrayIcon(self.card, self.refresh_now, self.open_settings,
+                                 self.quit, on_login=self.login)
+            self.bridge.report.connect(self.apply_report, Qt.ConnectionType.QueuedConnection)
+            self.bridge.syncing.connect(self.card.set_syncing, Qt.ConnectionType.QueuedConnection)
+            self.bridge.toast.connect(self.tray.toast, Qt.ConnectionType.QueuedConnection)
+            self.bridge.progress.connect(self.card.show_progress, Qt.ConnectionType.QueuedConnection)
+
+        def _build_backend(self):
             self.store = Store()
             self.client = ChaoxingClient(
                 request_delay=config.load()["sync"]["request_delay"])
             self.notifier = Notifier(self.store,
                                      toast=lambda t, b, u: self.bridge.toast.emit(t, b, u))
             self.sync = SyncService(self.store, self.client, self.notifier,
-                                    on_report=self.bridge.report.emit)
-            self.card = TaskCard(self.store, self.sync)
-            self.tray = TrayIcon(self.card, self.refresh_now, self.open_settings,
-                                 self.quit, on_login=self.login)
-            self.bridge.report.connect(self.apply_report)
-            self.bridge.syncing.connect(self.card.set_syncing)
-            self.bridge.toast.connect(self.tray.toast)
+                                    on_report=self.bridge.report.emit,
+                                    on_progress=self.bridge.progress.emit)
+
+        def _replace_backend(self, action):
+            self.sync.stop(timeout=0)
+            if self.sync.busy:
+                raise OSError("正在同步，请稍后再更改数据目录")
+            self.client.session.close()
+            self.store.close()
+            for handler in logging.getLogger().handlers[:]:
+                logging.getLogger().removeHandler(handler)
+                handler.close()
+            try:
+                action()
+            finally:
+                setup_logging(args.verbose)
+                style._ARROW_CACHE.clear()
+                self._build_backend()
+                self.card.store, self.card.sync = self.store, self.sync
+                self.card.set_need_login(not (config.has_credentials() or config.COOKIE_PATH.exists()))
+                self.card.apply_config()
+                self.tray.apply_theme()
+                self.card.show_card()
+
+        def choose_directory(self, path):
+            from pathlib import Path
+            if Path(path).resolve() == config.DATA_DIR.resolve():
+                config.update("storage", selected=True)
+            else:
+                self._replace_backend(lambda: config.select_data_directory(path))
+
+        def maintenance(self, action):
+            self._maintenance_pending = True
+            self.sync.stop(timeout=0)
+            self.card.set_status("正在停止同步并准备处理本地数据…")
+
+            def finish():
+                if self.sync.busy:
+                    QTimer.singleShot(100, finish)
+                    return
+                try:
+                    self._replace_backend(action)
+                    self.card.set_status("本地数据已更新，未登录时请点击「去登录」")
+                except Exception as exc:
+                    QMessageBox.warning(self.card, "操作未完成", str(exc))
+                finally:
+                    self._maintenance_pending = False
+                    self.sync.start()
+
+            finish()
 
         # ---------------- 生命周期
         def start(self, start_hidden: bool) -> None:
@@ -186,7 +244,7 @@ def run_gui(args) -> int:
                 self.card.show_card()
             # 首次启动不主动弹登录框：只提示，由用户点卡片上的「去登录」
             # （或托盘菜单的「登录 / 重新登录…」）再弹
-            if not config.has_credentials():
+            if not config.has_credentials() and not config.COOKIE_PATH.exists():
                 self.card.set_status("尚未登录，点右下角「去登录」", "warn")
             self.sync.start()
 
@@ -202,7 +260,10 @@ def run_gui(args) -> int:
             app.quit()
 
         # ---------------- 槽函数
+        @Slot(object)
         def apply_report(self, report) -> None:
+            if self._maintenance_pending:
+                return
             self.card.set_syncing(False)
             self.card.show_report(report)
             if not report.ok and "未登录" in " ".join(report.errors):
@@ -211,28 +272,55 @@ def run_gui(args) -> int:
                 else:
                     self.card.set_status("尚未登录，点右下角「去登录」", "warn")
 
+        @Slot()
         def refresh_now(self) -> None:
-            if self.sync.busy:
+            if self._maintenance_pending or self.sync.busy:
                 return
-            self.bridge.syncing.emit(True)
-            threading.Thread(target=self.sync.sync_once, daemon=True,
-                             name="xxt-manual-sync").start()
+            self.card.set_syncing(True)
+            self.sync.trigger()
 
+        @Slot()
         def login(self) -> None:
+            if self._maintenance_pending:
+                return
             dialog = LoginDialog(
                 lambda phone, pwd, remember: self.sync.login(phone, pwd, remember),
-                self.card)
+                self.card, directory_fn=self.choose_directory)
             if dialog.exec():
                 self.card.set_need_login(False)
                 self.card.set_status("登录成功，开始同步…", "ok")
+                self.sync.start()
                 self.refresh_now()
+            else:
+                self.sync.start()
 
+        @Slot()
         def open_settings(self) -> None:
+            if self._maintenance_pending:
+                return
             dialog = SettingsDialog(self.card, store=self.store)
             if dialog.exec():
-                dialog.save()
+                try:
+                    dialog.save()
+                except Exception as exc:
+                    QMessageBox.warning(self.card, "设置保存失败", str(exc))
+                    return
+                from pathlib import Path
+                if Path(dialog.data_directory.text()).resolve() != config.DATA_DIR.resolve():
+                    self.maintenance(lambda: config.select_data_directory(dialog.data_directory.text()))
+                    return
                 self.card.apply_config()
+                self.tray.apply_theme()
                 self.card.show_card()
+            elif dialog.reset_requested:
+                def reset_data():
+                    from . import startup
+                    if startup.is_enabled() and not startup.set_enabled(False):
+                        raise OSError("无法关闭开机自启，尚未清除数据")
+                    config.clear_all_data()
+                self.maintenance(reset_data)
+            else:
+                self.card.reload()
 
     assistant = Assistant()
     assistant.card.refreshRequested.connect(assistant.refresh_now)

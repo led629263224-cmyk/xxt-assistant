@@ -15,7 +15,7 @@
     ],
     "new_homework": true,
     "new_exam": true,
-    "new_notice": true,
+    "new_notice": false,
     "exam_lead_hours": [
       24,
       1
@@ -24,18 +24,18 @@
     "quiet_hours": [
       23,
       7
-    ],
-    "overdue_repeat_hours": 6
+    ]
   },
   "widget": {
-    "x": 1664,
-    "y": 179,
-    "theme": "dark",
+    "x": null,
+    "y": null,
+    "theme": "light",
     "always_on_top": false,
-    "opacity": 0.9,
+    "opacity": 0.97,
     "show_notices": true,
     "notice_count": 3,
-    "expanded": true
+    "background_image": "",
+    "background_overlay": 78
   },
   "notices": {
     "enabled": true,
@@ -43,5 +43,8 @@
   },
   "login": {
     "phone": ""
+  },
+  "storage": {
+    "selected": false
   }
 }
