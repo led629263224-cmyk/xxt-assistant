@@ -2,7 +2,7 @@
 
     .venv\\Scripts\\python.exe tools\\build_exe.py
 
-产物：dist\\xxt-assistant-v1.01.exe
+产物：dist\\xxt-assistant-v1.02.exe
 说明：
     * --onefile 单文件，首次启动要解包到临时目录，会慢 3~5 秒，之后正常
     * --noconsole 不弹黑窗口，日志写在同目录的 data\\app.log
@@ -54,8 +54,8 @@ def main() -> int:
     WORK.mkdir(parents=True, exist_ok=True)
     version_file = WORK / "version.txt"
     version_file.write_text(
-        "VSVersionInfo(ffi=FixedFileInfo(filevers=(1, 1, 0, 0), "
-        "prodvers=(1, 1, 0, 0), mask=0x3f, flags=0x0, OS=0x40004, "
+        "VSVersionInfo(ffi=FixedFileInfo(filevers=(1, 2, 0, 0), "
+        "prodvers=(1, 2, 0, 0), mask=0x3f, flags=0x0, OS=0x40004, "
         "fileType=0x1, subtype=0x0, date=(0, 0)), kids=["
         "StringFileInfo([StringTable('080404B0', ["
         "StringStruct('FileDescription', '学习通小助手'), "

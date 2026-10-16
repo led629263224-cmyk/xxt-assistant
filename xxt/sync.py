@@ -14,7 +14,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from . import config
-from .client import ChaoxingClient, LoginResult, NotLoggedIn, XxtError
+from .client import (AntispiderBlocked, ChaoxingClient, LoginResult,
+                     NotLoggedIn, XxtError)
 from .notify import Notifier
 from .parse import (assignment_key, exam_key, is_exam_unfinished,
                     is_homework_pending, nearest_datetime_for)
@@ -209,6 +210,14 @@ class SyncService:
             self._progress(f"正在补全截止时间 · {row['title']}")
             try:
                 detail = self.client.fetch_homework_detail(row["url"])
+            except AntispiderBlocked as exc:
+                # 被反爬拦下 ≠ "详情页里没有时间信息"：这两种情况返回值都是全 None，
+                # 一旦混为一谈就会盖上 detail_at，6 小时内不再重试，用户只看到
+                # "截止未知"而日志里连失败都没有。
+                message = f"作业详情被反爬拦截，截止时间这轮读不到：{exc}"
+                if message not in report.errors:
+                    report.errors.append(message)
+                break      # 已经被风控盯上，这一轮不再继续发详情请求
             except Exception as exc:
                 log.info("详情拉取失败 %s：%s", row["title"], exc)
                 continue

@@ -94,7 +94,7 @@ tools/preview_card.py   把界面渲染成 docs/ 下的预览图，改 UI 时用
 tools/smoke_ui.py       界面自检（右键移除、恢复、排序等 15 项）
 tools/snapshot_live.py  用真实数据库渲染卡片，检查使用
 tools/test_notify.py    提醒功能测试（规则推演 + 真弹 4 条系统通知，跑在临时目录里）
-tests/                  54 个测试：python -m unittest discover -s tests -t .
+tests/                  68 个测试：python -m unittest discover -s tests -t .
 tools/test_gui_flow.py   模拟主程序同步、迁移目录与清理数据的离线回归
 tools/test_desktop_presence.py  Windows 原生回归：独立应用在前台
 data/                   运行时数据：xxt.db / session_cookies.json / credentials.bin
@@ -155,7 +155,7 @@ Windows 使用独立浮窗保持透明背景正常绘制。勾选「窗口始终
 .venv\Scripts\python.exe tools\build_exe.py
 ```
 
-产物是 `dist\xxt-assistant-v1.01.exe`（单文件，约 52 MB）。
+产物是 `dist\xxt-assistant-v1.02.exe`（单文件，约 52 MB）。
 `dist\xxt-assistant-usage.txt` 使用说明。
 
 > 已发布到 GitHub Release。

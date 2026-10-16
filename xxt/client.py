@@ -54,6 +54,15 @@ URL_HOME = "https://i.chaoxing.com"
 LOGIN_MARKERS = ("passport2.chaoxing.com/login", "用户登录")
 NO_PERMISSION_MARKER = "没有此页面访问权限"
 
+# 服务端会重新签发的"一次性别票"（负载均衡后端亲和 / 考试节点亲和）。
+# 存盘再回放等于拿旧票去用，可能被判成异常，所以既不落盘、也不参与签名指纹。
+VOLATILE_COOKIES = ("route", "k8s", "k8sexam", "jrose")
+# 反爬拦截页（"提示页面 【9010】操作异常，请输入图片中的验证码"）的识别标记
+ANTISPIDER_URL_MARKER = "antispiderShowVerify"
+ANTISPIDER_TEXT_MARKERS = ("操作异常，请输入图片中的验证码",)
+# 只扫正文开头：作业题干里也可能出现"验证码"三个字，全页扫描会误判
+ANTISPIDER_HEAD_CHARS = 800
+
 
 class XxtError(Exception):
     """采集层通用异常。"""
@@ -65,6 +74,13 @@ class NotLoggedIn(XxtError):
 
 class EncMissing(XxtError):
     """课程页没有生成作业/考试签名，通常代表该课未开放此功能。"""
+
+
+class AntispiderBlocked(XxtError):
+    """请求被反爬拦截，拿到的是"请输入图片中的验证码"页面，没有真实内容。
+
+    和"详情页里确实没有时间信息"要区分开：前者应该重试，后者才该记成已尝试。
+    """
 
 
 class _SignatureExpired(XxtError):
@@ -112,7 +128,11 @@ class ChaoxingClient:
         config.ensure_dirs()
         if config.COOKIE_PATH.exists():
             try:
-                s.cookies.update(json.loads(config.COOKIE_PATH.read_text("utf-8")))
+                jar = json.loads(config.COOKIE_PATH.read_text("utf-8"))
+                # 旧版本会把易失票据一起存盘，升级上来的用户这里再过滤一次
+                for name in VOLATILE_COOKIES:
+                    jar.pop(name, None)
+                s.cookies.update(jar)
             except Exception:
                 pass
         return s
@@ -120,7 +140,8 @@ class ChaoxingClient:
     def save_cookies(self) -> None:
         try:
             config.ensure_dirs()
-            jar = {c.name: c.value for c in self.session.cookies}
+            jar = {c.name: c.value for c in self.session.cookies
+                   if c.name not in VOLATILE_COOKIES}
             config.COOKIE_PATH.write_text(json.dumps(jar, ensure_ascii=False),
                                           encoding="utf-8")
         except Exception as exc:  # pragma: no cover
@@ -147,8 +168,12 @@ class ChaoxingClient:
 
         只用"名字=值"：cookie 存盘时不带 domain/path，带上的话
         存下来的指纹和重新加载后的指纹永远对不上。
+
+        易失票据要一起排除：它们不落盘，算进指纹的话每次重启都会对不上，
+        签名缓存就等于白存了（重启要重拉全部课程页）。
         """
-        jar = {c.name: c.value for c in self.session.cookies}
+        jar = {c.name: c.value for c in self.session.cookies
+               if c.name not in VOLATILE_COOKIES}
         blob = "\n".join(f"{k}={jar[k]}" for k in sorted(jar))
         return hashlib.md5(blob.encode("utf-8")).hexdigest()
 
@@ -227,6 +252,41 @@ class ChaoxingClient:
         head = resp.text[:4000] if resp.text else ""
         return any(marker in resp.url or marker in head for marker in LOGIN_MARKERS)
 
+    @staticmethod
+    def _looks_like_antispider(resp: requests.Response) -> bool:
+        """是不是反爬拦截页（风控返回的验证码页）。
+
+        只看 URL 和正文开头：作业题干里也可能出现"验证码"三个字，
+        整页扫描会把正常的作业详情页误判成拦截页。
+        """
+        if ANTISPIDER_URL_MARKER in (resp.url or ""):
+            return True
+        head = strip_tags(resp.text or "")[:ANTISPIDER_HEAD_CHARS]
+        return any(marker in head for marker in ANTISPIDER_TEXT_MARKERS)
+
+    def _drop_volatile_cookies(self) -> int:
+        """丢掉易失票据，回落到服务端重新签发（返回丢掉的数量）。"""
+        dropped = [c for c in self.session.cookies if c.name in VOLATILE_COOKIES]
+        for c in dropped:
+            self.session.cookies.clear(c.domain, c.path, c.name)
+        return len(dropped)
+
+    def _ensure_not_blocked(self, resp: requests.Response, retry) -> requests.Response:
+        """命中反爬拦截页时丢票重试一次；仍被拦就抛 AntispiderBlocked。
+
+        重试必须是幂等的只读请求 —— 本项目所有请求都是查询语义。
+        """
+        if not self._looks_like_antispider(resp):
+            return resp
+        dropped = self._drop_volatile_cookies()
+        log.warning("疑似反爬拦截页 %s，丢弃 %d 个易失 cookie 后重试一次", resp.url, dropped)
+        again = retry()
+        if self._looks_like_antispider(again):
+            raise AntispiderBlocked(
+                "被学习通反爬拦截（操作异常，需要输入图片验证码），"
+                "换个时间再同步，或先在浏览器里正常访问一次")
+        return again
+
     # -------------------------------------------------- 登录
 
     def login(self, phone: str | None = None, password: str | None = None
@@ -301,7 +361,7 @@ class ChaoxingClient:
             r = self._raw_get(url, **kw)
         if self._looks_like_login(r) and self.ensure_login(force=True).ok:
             r = self._raw_get(url, **kw)
-        return r
+        return self._ensure_not_blocked(r, lambda: self._raw_get(url, **kw))
 
     def _post(self, url: str, **kw) -> requests.Response:
         try:
@@ -313,7 +373,7 @@ class ChaoxingClient:
             r = self._raw_post(url, **kw)
         if self._looks_like_login(r) and self.ensure_login(force=True).ok:
             r = self._raw_post(url, **kw)
-        return r
+        return self._ensure_not_blocked(r, lambda: self._raw_post(url, **kw))
 
     # -------------------------------------------------- 个人与课程
 
