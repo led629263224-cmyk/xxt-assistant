@@ -6,7 +6,7 @@
 > 全程**只读**：只调用"查列表 / 看详情"这类浏览接口，不会提交作业、不会答题、不会刷课，
 > 也不会在服务端做任何写操作。
 
-![悬浮清单](docs\live-card-expanded.png)
+![悬浮清单](docs/preview-light-expanded.png)
 
 ---
 
