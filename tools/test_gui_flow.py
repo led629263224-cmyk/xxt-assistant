@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import threading
 import time
 from unittest.mock import Mock
 from pathlib import Path
@@ -29,6 +30,7 @@ from xxt.ui.widget import TaskCard, TaskRow
 class FakeClient:
     def __init__(self, **kwargs):
         self.session = requests.Session()
+        self.continue_sync = threading.Event()
 
     def ensure_login(self):
         return LoginResult(True)
@@ -41,7 +43,10 @@ class FakeClient:
                 for i in range(4)]
 
     def fetch_homework_list(self, course):
-        time.sleep(.5)
+        # Keep later courses blocked until the GUI has displayed the first one.
+        if course["courseid"] == "1":
+            if not self.continue_sync.wait(timeout=30):
+                raise TimeoutError("GUI did not acknowledge partial results")
         return {"items": [{"title": course["name"], "status": "未提交",
                            "url": "https://example.org/" + course["courseid"]}]}
 
@@ -100,8 +105,31 @@ def run() -> int:
                 fn()
             except Exception as exc:
                 failures.append(f"{fn.__name__}: {type(exc).__name__}: {exc}")
+                if "card" in state:
+                    state["card"].sync.client.continue_sync.set()
                 app.quit()
         return wrapped
+
+    def wait_for(predicate, callback):
+        deadline = time.monotonic() + 15
+
+        @check
+        def poll():
+            if predicate():
+                callback()
+            elif time.monotonic() >= deadline:
+                raise TimeoutError(f"waiting for {callback.__name__}")
+            else:
+                QTimer.singleShot(50, poll)
+
+        QTimer.singleShot(0, poll)
+
+    def partial_ready():
+        for card in app.topLevelWidgets():
+            if isinstance(card, TaskCard):
+                state["card"] = card
+                return bool(card.findChildren(TaskRow))
+        return False
 
     @check
     def partial():
@@ -111,6 +139,9 @@ def run() -> int:
         assert 0 < count < 4, f"expected partial rows, got {count}"
         assert card.sync.busy
         print("PASS partial results visible while sync is running")
+        card.sync.client.continue_sync.set()
+        wait_for(lambda: not card.sync.busy and len(card.findChildren(TaskRow)) == 4,
+                 completed)
 
     @check
     def completed():
@@ -122,6 +153,7 @@ def run() -> int:
         print("PASS completion refresh and sizing without reopening card")
         state["action"] = "migrate"
         card.settingsRequested.emit()
+        QTimer.singleShot(0, migrated)
 
     @check
     def migrated():
@@ -132,6 +164,7 @@ def run() -> int:
         print("PASS runtime data migration reopens backend")
         state["action"] = "clear"
         card.settingsRequested.emit()
+        wait_for(lambda: not card.findChildren(TaskRow), cleared)
 
     @check
     def cleared():
@@ -141,14 +174,11 @@ def run() -> int:
         assert not config.CREDENTIAL_PATH.exists()
         assert not card.findChildren(TaskRow)
         print("PASS runtime clear resets store and live card")
+        state["finished"] = True
         card.sync.stop()
         app.quit()
 
-    QTimer.singleShot(1900, partial)
-    QTimer.singleShot(3800, completed)
-    QTimer.singleShot(4100, migrated)
-    QTimer.singleShot(4400, cleared)
-    QTimer.singleShot(8000, app.quit)
+    wait_for(partial_ready, partial)
     with patch("PySide6.QtWidgets.QApplication", return_value=app), \
             patch("PySide6.QtCore.QSharedMemory", IsolatedInstance), \
             patch("xxt.main.ChaoxingClient", FakeClient), \
@@ -159,8 +189,11 @@ def run() -> int:
                   return_value=Mock(get_password=Mock(return_value=None))):
         main.main([])
     if "card" in state:
+        state["card"].sync.client.continue_sync.set()
         state["card"].sync.stop()
         state["card"].store.close()
+    if not state.get("finished") and not failures:
+        failures.append("GUI flow exited before completing all checks")
     import logging
     for handler in logging.getLogger().handlers[:]:
         handler.close()
