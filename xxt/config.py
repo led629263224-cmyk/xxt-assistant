@@ -289,8 +289,9 @@ def select_data_directory(directory: str | Path) -> None:
 
 def clear_all_data() -> None:
     """关闭后台与文件句柄后清理本地数据，保留所选位置。"""
+    files = managed_files()
     clear_credentials()
-    for path in managed_files():
+    for path in files:
         path.unlink(missing_ok=True)
     cfg = copy.deepcopy(DEFAULT_CONFIG)
     cfg["storage"]["selected"] = True

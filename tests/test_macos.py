@@ -67,6 +67,13 @@ class TestMacCredentials(IsolatedConfig):
                 config.clear_all_data()
         self.assertEqual(config.COOKIE_PATH.read_text(), "keep")
 
+    def test_invalid_data_paths_leave_keychain_untouched(self):
+        config.save_credentials("test-user", "private-password")
+        with patch("xxt.config.managed_files", side_effect=OSError("unsafe path")):
+            with self.assertRaises(OSError):
+                config.clear_all_data()
+        self.assertEqual(config.load_credentials(), ("test-user", "private-password"))
+
     def test_missing_or_invalid_credentials_do_not_count_as_saved(self):
         config.clear_credentials()
         self.keychain.values[BUNDLE_ID, "credentials"] = "invalid-json"

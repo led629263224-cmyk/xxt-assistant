@@ -73,7 +73,7 @@ def run() -> int:
     app = QApplication([])
     app.setStyle("Fusion")
     tmp = tempfile.TemporaryDirectory(prefix="xxt-app-flow-")
-    root = Path(tmp.name)
+    root = Path(tmp.name).resolve()
     config._set_data_paths(root / "original")
     config.STORAGE_PATH = root / "storage.json"
     config.save()

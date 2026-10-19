@@ -19,7 +19,7 @@ class IsolatedConfig(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="xxt-features-")
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         # macOS 测试同样只使用临时数据，不读取/删除真实登录钥匙串。
         self.enterContext(patch("xxt.config._mac_keychain",
                                 return_value=Mock(get_password=Mock(return_value=None))))
