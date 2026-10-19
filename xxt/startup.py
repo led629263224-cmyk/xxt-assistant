@@ -1,10 +1,13 @@
-"""开机自启：写 HKCU 的 Run 键（不需要管理员权限）。"""
+"""登录自启：Windows Run 注册表 / macOS 用户 LaunchAgent。"""
 
 from __future__ import annotations
 
 import logging
+import plistlib
 import sys
 from pathlib import Path
+
+from . import BUNDLE_ID
 
 log = logging.getLogger("xxt.startup")
 
@@ -23,12 +26,31 @@ def _command() -> str:
         return f'"{sys.executable}" --tray'
     pythonw = Path(sys.executable).with_name("pythonw.exe")
     exe = pythonw if pythonw.exists() else Path(sys.executable)
-    from . import config
-    launcher = config.BASE_DIR / "run.py"
+    launcher = Path(__file__).resolve().parent.parent / "run.py"
     return f'"{exe}" "{launcher}" --tray'
 
 
+def _agent_path() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / f"{BUNDLE_ID}.plist"
+
+
+def _mac_arguments() -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--tray"]
+    launcher = Path(__file__).resolve().parent.parent / "run.py"
+    return [sys.executable, str(launcher), "--tray"]
+
+
 def is_enabled() -> bool:
+    if sys.platform == "darwin":
+        try:
+            agent = plistlib.loads(_agent_path().read_bytes())
+            return (isinstance(agent, dict) and agent.get("Label") == BUNDLE_ID
+                    and agent.get("RunAtLoad") is True)
+        except (OSError, ValueError, plistlib.InvalidFileException):
+            return False
+    if sys.platform != "win32":
+        return False
     try:
         import winreg
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
@@ -43,6 +65,34 @@ def is_enabled() -> bool:
 
 def set_enabled(enabled: bool) -> bool:
     """返回是否操作成功。写入失败不抛异常，只返回 False。"""
+    if sys.platform == "darwin":
+        try:
+            path = _agent_path()
+            if enabled:
+                from . import config
+                config.ensure_dirs()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                agent = {
+                    "Label": BUNDLE_ID,
+                    "ProgramArguments": _mac_arguments(),
+                    "RunAtLoad": True,
+                    "LimitLoadToSessionType": "Aqua",
+                    "ProcessType": "Interactive",
+                    "StandardOutPath": str(config.DATA_DIR / "launch-error.log"),
+                    "StandardErrorPath": str(config.DATA_DIR / "launch-error.log"),
+                }
+                tmp = path.with_suffix(".plist.tmp")
+                tmp.write_bytes(plistlib.dumps(agent))
+                tmp.replace(path)
+            else:
+                path.unlink(missing_ok=True)
+            # launchd 在下次登录时读取；不在这里加载/卸载，避免重复启动或终止当前进程。
+            return True
+        except OSError as exc:
+            log.warning("设置登录自启失败：%s", exc)
+            return False
+    if sys.platform != "win32":
+        return False
     try:
         import winreg
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,

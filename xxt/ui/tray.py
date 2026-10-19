@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import time
 
 from PySide6.QtCore import Qt, QUrl, QRectF
@@ -41,7 +42,7 @@ def _fallback_icon(color: str = "#2563EB") -> QIcon:
     painter.setPen(Qt.PenStyle.NoPen)
     painter.drawRoundedRect(3, 3, 58, 58, 15, 15)
     painter.setPen(QColor("white"))
-    font = QFont("Microsoft YaHei")
+    font = QFont() if sys.platform == "darwin" else QFont("Microsoft YaHei")
     font.setPixelSize(34)
     font.setBold(True)
     painter.setFont(font)
@@ -94,7 +95,7 @@ class TrayIcon(QSystemTrayIcon):
         self._ignore_trigger_until = 0.0
         self.setToolTip("学习通小助手")
 
-        menu = RoundedMenu()
+        menu = QMenu() if sys.platform == "darwin" else RoundedMenu()
         self.act_toggle = QAction("显示任务清单", menu)
         self.act_toggle.triggered.connect(self.toggle_card)
         menu.addAction(self.act_toggle)
@@ -132,14 +133,18 @@ class TrayIcon(QSystemTrayIcon):
         self.activated.connect(self._on_activated)
 
     def _sync_menu_text(self) -> None:
-        self._menu.apply_theme()
+        self.apply_theme()
         self.act_toggle.setText("隐藏任务清单" if self.card.isVisible()
                                 else "显示任务清单")
 
     def apply_theme(self) -> None:
-        self._menu.apply_theme()
+        if isinstance(self._menu, RoundedMenu):
+            self._menu.apply_theme()
 
     def _on_activated(self, reason) -> None:
+        # macOS 打开菜单时也会发 Trigger，显示/隐藏由菜单动作处理。
+        if sys.platform == "darwin":
+            return
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             # Windows 双击还可能带着单击通知；双击始终显示，避免连续切换后又隐藏。
             self._ignore_trigger_until = time.monotonic() + QApplication.doubleClickInterval() / 1000

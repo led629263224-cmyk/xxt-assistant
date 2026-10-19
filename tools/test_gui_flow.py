@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 import time
+from unittest.mock import Mock
 from pathlib import Path
 from unittest.mock import patch
 
@@ -153,7 +154,9 @@ def run() -> int:
             patch("xxt.main.ChaoxingClient", FakeClient), \
             patch.object(dialogs, "SettingsDialog", TestSettings), \
             patch.object(TaskCard, "reload", checked_reload), \
-            patch("xxt.startup.is_enabled", return_value=False):
+            patch("xxt.startup.is_enabled", return_value=False), \
+            patch("xxt.config._mac_keychain",
+                  return_value=Mock(get_password=Mock(return_value=None))):
         main.main([])
     if "card" in state:
         state["card"].sync.stop()

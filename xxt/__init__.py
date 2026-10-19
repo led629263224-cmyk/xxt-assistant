@@ -14,3 +14,4 @@
 
 __version__ = "1.02"
 APP_NAME = "学习通小助手"
+BUNDLE_ID = "io.github.led629263224-cmyk.xxt-assistant"

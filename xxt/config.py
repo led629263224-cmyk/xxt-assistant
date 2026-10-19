@@ -2,7 +2,8 @@
 
 配置分两处存放：
     config.json               普通设置（刷新间隔、提醒阈值、窗口位置主题……）
-    data/credentials.bin      账号密码，DPAPI 加密后单独放，避免和设置混在一起
+    data/credentials.bin      Windows 账号密码，DPAPI 加密后单独放
+    macOS 账号密码存放在系统钥匙串中，不随数据目录迁移
 """
 
 from __future__ import annotations
@@ -17,10 +18,13 @@ from pathlib import Path
 from typing import Any
 
 from . import crypto
+from . import BUNDLE_ID
 
 
 def _base_dir() -> Path:
-    """程序目录：源码运行时是项目根，打包成 exe 后是 exe 所在目录。"""
+    """默认配置目录；macOS 的应用包只存资源，不写入运行数据。"""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "xxt-assistant"
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent.parent
@@ -139,25 +143,44 @@ def update(section: str, **values) -> dict[str, Any]:
 
 # ------------------------------------------------------------------ 凭据
 
+def credential_storage_name() -> str:
+    return "macOS 钥匙串" if sys.platform == "darwin" else "Windows DPAPI"
+
+
+def _mac_keychain():
+    # 显式选用系统后端，避免自动发现到其他密码存储插件。
+    from keyring.backends.macOS import Keyring
+    return Keyring()
+
+
 def save_credentials(phone: str, password: str) -> None:
-    """DPAPI 加密后保存账号密码。"""
+    """Windows 用 DPAPI，macOS 用当前用户的登录钥匙串。"""
     payload = json.dumps({"phone": phone, "password": password},
                          ensure_ascii=False)
-    token = crypto.protect(payload)
-    ensure_dirs()
-    tmp = CREDENTIAL_PATH.with_suffix(".bin.tmp")
-    tmp.write_bytes(token.encode("ascii"))
-    os.replace(tmp, CREDENTIAL_PATH)
+    if sys.platform == "darwin":
+        _mac_keychain().set_password(BUNDLE_ID, "credentials", payload)
+    else:
+        token = crypto.protect(payload)
+        ensure_dirs()
+        tmp = CREDENTIAL_PATH.with_suffix(".bin.tmp")
+        tmp.write_bytes(token.encode("ascii"))
+        os.replace(tmp, CREDENTIAL_PATH)
     update("login", phone=phone)
 
 
 def load_credentials() -> tuple[str, str] | None:
     """读取账号密码；没有或解不开都返回 None。"""
-    if not CREDENTIAL_PATH.exists():
-        return None
     try:
-        token = CREDENTIAL_PATH.read_text(encoding="ascii").strip()
-        payload = json.loads(crypto.unprotect(token))
+        if sys.platform == "darwin":
+            value = _mac_keychain().get_password(BUNDLE_ID, "credentials")
+            if value is None:
+                return None
+        else:
+            if not CREDENTIAL_PATH.exists():
+                return None
+            token = CREDENTIAL_PATH.read_text(encoding="ascii").strip()
+            value = crypto.unprotect(token)
+        payload = json.loads(value)
         phone, password = payload.get("phone"), payload.get("password")
         if phone and password:
             return phone, password
@@ -167,10 +190,16 @@ def load_credentials() -> tuple[str, str] | None:
 
 
 def has_credentials() -> bool:
+    if sys.platform == "darwin":
+        return load_credentials() is not None
     return CREDENTIAL_PATH.exists()
 
 
 def clear_credentials() -> None:
+    if sys.platform == "darwin":
+        keychain = _mac_keychain()
+        if keychain.get_password(BUNDLE_ID, "credentials") is not None:
+            keychain.delete_password(BUNDLE_ID, "credentials")
     CREDENTIAL_PATH.unlink(missing_ok=True)
 
 
@@ -260,6 +289,7 @@ def select_data_directory(directory: str | Path) -> None:
 
 def clear_all_data() -> None:
     """关闭后台与文件句柄后清理本地数据，保留所选位置。"""
+    clear_credentials()
     for path in managed_files():
         path.unlink(missing_ok=True)
     cfg = copy.deepcopy(DEFAULT_CONFIG)

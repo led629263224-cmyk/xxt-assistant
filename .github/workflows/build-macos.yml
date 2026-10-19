@@ -1,0 +1,71 @@
+name: Build macOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'codex/macos-*'
+    tags:
+      - 'v*'
+  pull_request:
+    paths:
+      - 'xxt/**'
+      - 'tests/**'
+      - 'tools/**'
+      - 'assets/**'
+      - 'requirements*.txt'
+      - 'run.py'
+      - 'docs/macos.md'
+      - '.github/workflows/build-macos.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: macOS ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            arch: arm64
+            python-arch: arm64
+          - os: macos-15-intel
+            arch: x86_64
+            python-arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      PYTHONUTF8: '1'
+      MACOSX_DEPLOYMENT_TARGET: '12.0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          architecture: ${{ matrix.python-arch }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-build-macos.txt
+      - name: Install dependencies
+        run: python -m pip install --only-binary=:all: -r requirements-build-macos.txt
+      - name: Run offline tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m unittest discover -s tests -t .
+          python tools/smoke_ui.py
+          python tools/test_gui_flow.py
+      - name: Build app, ZIP and DMG with ad-hoc signing
+        run: python tools/build_macos.py --arch ${{ matrix.arch }}
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: xxt-assistant-macos-${{ matrix.arch }}
+          if-no-files-found: error
+          path: |
+            dist/macos-${{ matrix.arch }}/*.dmg
+            dist/macos-${{ matrix.arch }}/*.zip
+            dist/macos-${{ matrix.arch }}/SHA256SUMS.txt

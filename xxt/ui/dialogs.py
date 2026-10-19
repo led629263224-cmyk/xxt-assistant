@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 
 from PySide6.QtCore import Qt, QUrl, Signal, Slot
@@ -40,8 +41,9 @@ class LoginDialog(QDialog):
         root = QVBoxLayout(self)
         root.setSpacing(10)
 
-        tip = QLabel("账号密码仅用 Windows DPAPI 加密后保存在本机，"
-                     "不会上传到任何服务器。抓取全部为只读请求。")
+        storage_name = config.credential_storage_name()
+        tip = QLabel(f"记住的账号密码由 {storage_name} 安全保存在本机。"
+                     "账号密码仅用于向学习通登录，抓取全部为只读请求。")
         tip.setWordWrap(True)
         tip.setObjectName("Meta")
         root.addWidget(tip)
@@ -71,7 +73,7 @@ class LoginDialog(QDialog):
             root.addWidget(QLabel("本地数据保存位置（账号、缓存和设置）"))
             root.addLayout(directory_row)
 
-        self.remember = QCheckBox("记住账号密码（DPAPI 加密）")
+        self.remember = QCheckBox(f"记住账号密码（{storage_name}）")
         self.remember.setChecked(True)
         root.addWidget(self.remember)
 
@@ -289,7 +291,9 @@ class SettingsDialog(QDialog):
 
         self.show_notices = QCheckBox("在列表底部显示未读通知")
         self.show_notices.setChecked(bool(w.get("show_notices", True)))
-        self.autostart = QCheckBox("开机自动启动")
+        self.autostart = QCheckBox("登录后自动启动" if sys.platform == "darwin" else "开机自动启动")
+        if sys.platform == "darwin":
+            self.autostart.setToolTip("下次登录 macOS 时生效；请先将应用放入“应用程序”文件夹。")
         self.autostart.setChecked(startup.is_enabled())
 
         for row in (self.always_on_top, self.dark):
@@ -335,7 +339,7 @@ class SettingsDialog(QDialog):
         acc_lay = QVBoxLayout(acc)
         acc_lay.setSpacing(8)
         creds = config.load_credentials()
-        self.account_label = QLabel(f"{creds[0]}（已用 DPAPI 加密保存）" if creds
+        self.account_label = QLabel(f"{creds[0]}（已由 {config.credential_storage_name()} 保存）" if creds
                                     else "尚未保存账号")
         self.account_label.setObjectName("Meta")
         acc_lay.addWidget(self.account_label)
@@ -434,7 +438,11 @@ class SettingsDialog(QDialog):
     def _clear_credentials(self) -> None:
         if QMessageBox.question(self, "确认", "确定要清除本机保存的账号密码吗？") \
                 == QMessageBox.StandardButton.Yes:
-            config.clear_credentials()
+            try:
+                config.clear_credentials()
+            except Exception as exc:
+                QMessageBox.warning(self, "清除失败", str(exc))
+                return
             self.account_label.setText("尚未保存账号")
 
     @staticmethod

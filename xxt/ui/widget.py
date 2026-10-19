@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 from datetime import datetime, timedelta
 
 from PySide6.QtCore import (QEvent, QPoint, QRectF, QSize, Qt, QTimer, Signal,
@@ -303,7 +304,9 @@ class TaskCard(QWidget):
 
     def _apply_window_flags(self) -> None:
         cfg = config.load()
-        flags = (Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool)
+        # macOS 的 Tool 是 NSPanel，默认失焦隐藏且处于普通窗口之上。
+        kind = Qt.WindowType.Window if sys.platform == "darwin" else Qt.WindowType.Tool
+        flags = Qt.WindowType.FramelessWindowHint | kind
         if cfg.get("widget", {}).get("always_on_top", False):
             flags |= Qt.WindowType.WindowStaysOnTopHint
         self.setWindowFlags(flags)
@@ -388,7 +391,7 @@ class TaskCard(QWidget):
         btn.setFixedSize(22, 22)
         # 指定符号字体，避免 ⟳ ⚙ 这类字符被系统回退成彩色 emoji
         font = btn.font()
-        font.setFamily("Segoe UI Symbol")
+        font.setFamily("Apple Symbols" if sys.platform == "darwin" else "Segoe UI Symbol")
         btn.setFont(font)
         return btn
 

@@ -20,6 +20,9 @@ class IsolatedConfig(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix="xxt-features-")
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        # macOS 测试同样只使用临时数据，不读取/删除真实登录钥匙串。
+        self.enterContext(patch("xxt.config._mac_keychain",
+                                return_value=Mock(get_password=Mock(return_value=None))))
         self.old = {name: getattr(config, name) for name in
                     ("DATA_DIR", "CONFIG_PATH", "CREDENTIAL_PATH", "COOKIE_PATH",
                      "DB_PATH", "LOG_PATH", "STORAGE_PATH", "_cache")}

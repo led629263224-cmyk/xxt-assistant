@@ -155,7 +155,8 @@ def run_gui(args) -> int:
     # 单实例：已经有一个在跑就退出，避免两个悬浮窗
     guard = QSharedMemory("xxt-assistant-single-instance")
     if not guard.create(1):
-        QMessageBox.information(None, APP_NAME, "学习通小助手已经在运行了（看右下角托盘）。")
+        location = "顶部菜单栏" if sys.platform == "darwin" else "右下角托盘"
+        QMessageBox.information(None, APP_NAME, f"学习通小助手已经在运行了（看{location}）。")
         return 0
 
     class Bridge(QObject):

@@ -15,6 +15,7 @@ import sys
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -142,4 +143,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    with patch("xxt.config._mac_keychain",
+               return_value=Mock(get_password=Mock(return_value=None))):
+        raise SystemExit(main())
